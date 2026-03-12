@@ -298,9 +298,20 @@ def load_video_minicpmv_mplug_owl3(video: Union[str, bytes], max_num_frames):
 
 def load_audio(audio: Union[str, bytes], sampling_rate: int, return_sr: bool = False):
     import librosa
-    audio_io = load_file(audio)
-    res = librosa.load(audio_io, sr=sampling_rate)
-    return res if return_sr else res[0]
+    if re.search(r'\.ark:\d+', audio):
+        import kaldiio
+        current_sr, wav_np = kaldiio.load_mat(audio)
+        audio_raw = wav_np.astype(np.float32)
+        if audio_raw.dtype != np.float32:
+            audio_raw = audio_raw / 32768.0
+        if sampling_rate is not None and current_sr != sampling_rate:
+            audio_raw = librosa.resample(audio_raw, orig_sr=orig_sr, target_sr=sampling_rate)
+            current_sr = sampling_rate
+        return (audio_raw, current_sr) if return_sr else audio_raw
+    else:
+        audio_io = load_file(audio)
+        res = librosa.load(audio_io, sr=sampling_rate)
+        return res if return_sr else res[0]
 
 
 def load_video_valley(video: Union[str, bytes]):
