@@ -1,0 +1,12 @@
+FROM docker.m.daocloud.io/qwenllm/qwen3-asr:latest
+
+WORKDIR /workspace/ms-swift
+
+COPY . .
+
+RUN python3 -m pip install --no-cache-dir \
+    --editable . \
+    "qwen-asr==0.0.6" \
+    "transformers==4.57.6"
+
+ENV PYTHONPATH=/workspace/ms-swift
