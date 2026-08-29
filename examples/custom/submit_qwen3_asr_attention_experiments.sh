@@ -12,16 +12,19 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_DIR}/experiments/attention_intervention/forma
 NUM_SHARDS="${NUM_SHARDS:-8}"
 DRY_RUN="${DRY_RUN:-0}"
 SKIP_BASELINE_SHARD0="${SKIP_BASELINE_SHARD0:-0}"
+SHARD_START="${SHARD_START:-0}"
+SHARD_END="${SHARD_END:-$((NUM_SHARDS - 1))}"
+SKIP_LOCAL_MATCHED="${SKIP_LOCAL_MATCHED:-0}"
 
 manifest="${DATA_DIR}/test_oracle_v1/history/multitask.jsonl"
 path_prefix_to="${DATA_DIR}"
 
-# Prefer VC capacity for formal runs.  The current free-capacity split lets all
-# shards start without depending on local 2080 GPUs.
+# Single-GPU jobs on the other queues are automatically redirected to minijob
+# partitions, whose low-utilization watchdog interrupts this autoregressive
+# workload.  The regular 4090 queue is verified to complete full shards.
 partitions=(
-  pdgpu-4090 pdgpu-4090
-  pdgpu-3090 pdgpu-3090 pdgpu-3090
-  pdgpu-a10 pdgpu-a10 pdgpu-a10
+  pdgpu-4090 pdgpu-4090 pdgpu-4090 pdgpu-4090
+  pdgpu-4090 pdgpu-4090 pdgpu-4090 pdgpu-4090
 )
 
 # name|strategy|alpha
@@ -43,8 +46,11 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 
 for group in "${groups[@]}"; do
   IFS='|' read -r group_name strategy alpha <<<"${group}"
-  for ((shard = 0; shard < NUM_SHARDS; shard++)); do
+  for ((shard = SHARD_START; shard <= SHARD_END; shard++)); do
     if [[ "${SKIP_BASELINE_SHARD0}" == "1" && "${group_name}" == "baseline" && "${shard}" == "0" ]]; then
+      continue
+    fi
+    if [[ "${SKIP_LOCAL_MATCHED}" == "1" && "${group_name}" == "matched-random" && "${shard}" -ge 5 ]]; then
       continue
     fi
     partition="${partitions[$((shard % ${#partitions[@]}))]}"
