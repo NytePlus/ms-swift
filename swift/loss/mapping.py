@@ -2,6 +2,7 @@
 from .causal_lm import CustomCrossEntropyLoss
 from .embedding import ContrastiveLoss, CosineSimilarityLoss, InfonceLoss, OnlineContrastiveLoss
 from .reranker import ListwiseRerankerLoss, PointwiseRerankerLoss
+from .softdtw_distill import SoftDTWDistillLoss
 
 loss_map = {
     'cross_entropy': CustomCrossEntropyLoss,  # examples
@@ -13,4 +14,6 @@ loss_map = {
     # # reranker
     'pointwise_reranker': PointwiseRerankerLoss,
     'listwise_reranker': ListwiseRerankerLoss,
+    # cross-modal attention distillation
+    'softdtw_distill': SoftDTWDistillLoss,
 }
