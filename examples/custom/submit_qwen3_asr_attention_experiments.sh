@@ -15,6 +15,7 @@ SKIP_BASELINE_SHARD0="${SKIP_BASELINE_SHARD0:-0}"
 SHARD_START="${SHARD_START:-0}"
 SHARD_END="${SHARD_END:-$((NUM_SHARDS - 1))}"
 SKIP_LOCAL_MATCHED="${SKIP_LOCAL_MATCHED:-0}"
+GROUP_FILTER="${GROUP_FILTER:-}"
 
 manifest="${DATA_DIR}/test_oracle_v1/history/multitask.jsonl"
 path_prefix_to="${DATA_DIR}"
@@ -46,6 +47,9 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 
 for group in "${groups[@]}"; do
   IFS='|' read -r group_name strategy alpha <<<"${group}"
+  if [[ -n "${GROUP_FILTER}" && "${group_name}" != "${GROUP_FILTER}" ]]; then
+    continue
+  fi
   for ((shard = SHARD_START; shard <= SHARD_END; shard++)); do
     if [[ "${SKIP_BASELINE_SHARD0}" == "1" && "${group_name}" == "baseline" && "${shard}" == "0" ]]; then
       continue
