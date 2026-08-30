@@ -8,6 +8,7 @@ DATA_DIR="${DATA_DIR:-/hpc_stor03/sjtu_home/xiaoyu.gu/workspace/wcc_workspace/sl
 MODEL_DIR="${MODEL_DIR:-/hpc_stor03/sjtu_home/xiaoyu.gu/workspace/data-prepare/model/Qwen3-ASR-1.7B}"
 PYTHON_BIN="${PYTHON_BIN:-/hpc_stor03/sjtu_home/xiaoyu.gu/miniconda3/envs/qwen3-asr/bin/python}"
 IMAGE="${IMAGE:-docker.v2.aispeech.com/sjtu/sjtu_yukai-grace-vcg:v0}"
+QOS="${QOS:-30m}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_DIR}/experiments/attention_intervention/formal}"
 NUM_SHARDS="${NUM_SHARDS:-8}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
@@ -69,6 +70,7 @@ for group in "${groups[@]}"; do
     fi
     vc submit \
       --partition "${partition}" \
+      --qos "${QOS}" \
       --image "${IMAGE}" \
       --num-task 1 \
       --cpu-per-task 8 \
