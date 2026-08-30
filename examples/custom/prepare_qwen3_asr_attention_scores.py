@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 
@@ -77,7 +78,10 @@ def prepare_group(
     for name in ('normalize.py', 'wenet_compute_cer.py', 'score_old.py'):
         replace_symlink(local_score / name, scorer_dir / name)
     expected_pred = local_score / 'results/qwen_asr_pred/dev/dev_qwen_asr_pred'
-    replace_symlink(expected_pred, merged.resolve())
+    expected_pred.parent.mkdir(parents=True, exist_ok=True)
+    if expected_pred.is_symlink() or expected_pred.exists():
+        expected_pred.unlink()
+    shutil.copyfile(merged, expected_pred)
 
     return {
         'group': group,
