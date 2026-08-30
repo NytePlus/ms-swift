@@ -23,10 +23,19 @@ _ATTENTION_INTERVENTION_RUNTIME = None
 
 
 class AttentionInterventionRuntime:
-    """Mutable per-process state for test-time T<-C attention interventions."""
+    """Mutable per-process state for test-time context-edge interventions."""
 
     TEACHER_STRATEGIES = {'correct_teacher', 'shuffled_teacher'}
-    STRATEGIES = {'baseline', 'correct_teacher', 'shuffled_teacher', 'zero_context', 'matched_mass_random'}
+    STRATEGIES = {
+        'baseline',
+        'correct_teacher',
+        'shuffled_teacher',
+        'zero_context',
+        'zero_context_to_audio',
+        'zero_context_both',
+        'matched_mass_random',
+        'no_context',
+    }
 
     def __init__(self, strategy: str, *, alpha: float = 1.0, layers=None, seed: int = 42):
         if strategy not in self.STRATEGIES:
@@ -38,6 +47,7 @@ class AttentionInterventionRuntime:
         self.mode = 'student'
         self.step = 0
         self.student_context_mask: Optional[torch.Tensor] = None
+        self.student_audio_mask: Optional[torch.Tensor] = None
         self.teacher_context_mask: Optional[torch.Tensor] = None
         self.teacher_weights: Dict[int, torch.Tensor] = {}
         self.stats = {
@@ -46,6 +56,8 @@ class AttentionInterventionRuntime:
             'max_abs_delta': 0.0,
             'context_mass_before': 0.0,
             'context_mass_after': 0.0,
+            'audio_applied_rows': 0,
+            'transcript_applied_rows': 0,
         }
 
     @property
@@ -60,9 +72,11 @@ class AttentionInterventionRuntime:
         self.teacher_context_mask = context_mask.bool()
         self.teacher_weights.clear()
 
-    def begin_student(self, context_mask: torch.Tensor):
+    def begin_student(self, context_mask: torch.Tensor, audio_mask: Optional[torch.Tensor] = None):
         self.mode = 'student'
         self.student_context_mask = context_mask.bool()
+        if audio_mask is not None:
+            self.student_audio_mask = audio_mask.bool()
 
     def advance(self):
         self.step += 1
@@ -117,6 +131,37 @@ def _context_indices(mask: Optional[torch.Tensor], batch_index: int, key_length:
     return row[:key_length].nonzero(as_tuple=False).flatten()
 
 
+def _query_indices(mask: Optional[torch.Tensor], batch_index: int, query_length: int, key_length: int, device):
+    """Map absolute prompt positions in ``mask`` to local attention query rows."""
+    if mask is None or batch_index >= mask.shape[0]:
+        return torch.empty(0, dtype=torch.long, device=device)
+    row = mask[batch_index].to(device=device)
+    if row.shape[0] < key_length:
+        row = nn.functional.pad(row, (0, key_length - row.shape[0]), value=False)
+    query_start = key_length - query_length
+    return row[query_start:key_length].nonzero(as_tuple=False).flatten()
+
+
+def _zero_context_rows(result, runtime, layer_index, batch_index, query_indices, edge):
+    student_indices = _context_indices(
+        runtime.student_context_mask, batch_index, result.shape[-1], result.device)
+    if not student_indices.numel():
+        return
+    for query_index in query_indices.tolist():
+        row = result[batch_index, :, query_index, :]
+        original_row = row.clone()
+        original_context_mass = original_row.index_select(-1, student_indices).sum().item()
+        row.index_fill_(-1, student_indices, 0)
+        row.div_(row.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(row.dtype).tiny))
+        delta = (row - original_row).abs().max().item()
+        if delta > 0:
+            runtime.stats['applied_rows'] += 1
+            runtime.stats[f'{edge}_applied_rows'] += 1
+            runtime.stats['max_abs_delta'] = max(runtime.stats['max_abs_delta'], delta)
+            runtime.stats['context_mass_before'] += original_context_mass
+            runtime.stats['context_mass_after'] += row.index_select(-1, student_indices).sum().item()
+
+
 def _teacher_target(weights, teacher_weights, student_indices, teacher_indices, alpha):
     eps = torch.finfo(torch.float32).eps
     source = weights.float()
@@ -148,9 +193,22 @@ def _teacher_target(weights, teacher_weights, student_indices, teacher_indices, 
 
 
 def _apply_attention_intervention(weights: torch.Tensor, runtime: AttentionInterventionRuntime, layer_index: int):
-    if runtime.strategy == 'baseline' or not runtime.selected(layer_index):
+    if runtime.strategy in {'baseline', 'no_context'} or not runtime.selected(layer_index):
         return weights
     result = weights.clone()
+    if runtime.strategy in {'zero_context_to_audio', 'zero_context_both'}:
+        for batch_index in range(result.shape[0]):
+            audio_queries = _query_indices(
+                runtime.student_audio_mask,
+                batch_index,
+                result.shape[-2],
+                result.shape[-1],
+                result.device,
+            )
+            _zero_context_rows(result, runtime, layer_index, batch_index, audio_queries, 'audio')
+        if runtime.strategy == 'zero_context_to_audio':
+            return result
+
     query_index = result.shape[-2] - 1
     for batch_index in range(result.shape[0]):
         student_indices = _context_indices(
@@ -160,7 +218,7 @@ def _apply_attention_intervention(weights: torch.Tensor, runtime: AttentionInter
         row = result[batch_index, :, query_index, :]
         original_row = row.clone()
         original_context_mass = original_row.index_select(-1, student_indices).sum().item()
-        if runtime.strategy == 'zero_context':
+        if runtime.strategy in {'zero_context', 'zero_context_both'}:
             row.index_fill_(-1, student_indices, 0)
             row.div_(row.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(row.dtype).tiny))
         elif runtime.strategy == 'matched_mass_random':
@@ -182,6 +240,7 @@ def _apply_attention_intervention(weights: torch.Tensor, runtime: AttentionInter
         delta = (row - original_row).abs().max().item()
         if delta > 0:
             runtime.stats['applied_rows'] += 1
+            runtime.stats['transcript_applied_rows'] += 1
             runtime.stats['max_abs_delta'] = max(runtime.stats['max_abs_delta'], delta)
             runtime.stats['context_mass_before'] += original_context_mass
             runtime.stats['context_mass_after'] += row.index_select(-1, student_indices).sum().item()

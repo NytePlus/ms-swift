@@ -64,11 +64,15 @@ def _build_teacher_inputs(asr, student_ids, student_attention_mask, contexts, sh
     teacher_rows = []
     teacher_context_rows = []
     student_context_mask = torch.zeros_like(student_attention_mask, dtype=torch.bool)
+    student_audio_mask = torch.zeros_like(student_attention_mask, dtype=torch.bool)
 
     for batch_index, context in enumerate(contexts):
         valid_positions = student_attention_mask[batch_index].bool().nonzero(as_tuple=False).flatten()
         unpadded = student_ids[batch_index].index_select(0, valid_positions)
         unpadded_list = unpadded.tolist()
+        audio_positions = torch.tensor(
+            [token in audio_ids for token in unpadded_list], dtype=torch.bool, device=unpadded.device)
+        student_audio_mask[batch_index, valid_positions[audio_positions]] = True
         context_ids = tokenizer(context, add_special_tokens=False).input_ids if context else []
         context_start, context_end = _find_subsequence(unpadded_list, context_ids)
         if context_ids:
@@ -95,7 +99,7 @@ def _build_teacher_inputs(asr, student_ids, student_attention_mask, contexts, sh
     teacher_context_mask = torch.zeros_like(teacher_attention_mask)
     for batch_index, (context_row, offset) in enumerate(zip(teacher_context_rows, offsets)):
         teacher_context_mask[batch_index, offset:] = context_row
-    return teacher_ids, teacher_attention_mask, teacher_context_mask, student_context_mask
+    return teacher_ids, teacher_attention_mask, teacher_context_mask, student_context_mask, student_audio_mask
 
 
 class TeacherMapUpdater(StoppingCriteria):
@@ -148,6 +152,8 @@ class IntervenedQwen3ASRModel(Qwen3ASRModel):
             'max_abs_delta': 0.0,
             'context_mass_before': 0.0,
             'context_mass_after': 0.0,
+            'audio_applied_rows': 0,
+            'transcript_applied_rows': 0,
         }
         self.model.thinker.model.config._attn_implementation = BACKEND_NAME
         selected = None if layers is None else set(layers)
@@ -161,15 +167,16 @@ class IntervenedQwen3ASRModel(Qwen3ASRModel):
     @torch.no_grad()
     def _infer_asr_transformers(self, contexts, wavs, languages):
         outputs = []
+        effective_contexts = [''] * len(contexts) if self.intervention_strategy == 'no_context' else contexts
         texts = [self._build_text_prompt(context=context, force_language=language)
-                 for context, language in zip(contexts, languages)]
+                 for context, language in zip(effective_contexts, languages)]
         batch_size = self.max_inference_batch_size
         if batch_size is None or batch_size < 0:
             batch_size = len(texts)
 
         for start in range(0, len(texts), batch_size):
             sub_texts = texts[start:start + batch_size]
-            sub_contexts = contexts[start:start + batch_size]
+            sub_contexts = effective_contexts[start:start + batch_size]
             sub_wavs = wavs[start:start + batch_size]
             inputs = self.processor(text=sub_texts, audio=sub_wavs, return_tensors='pt', padding=True)
             inputs = inputs.to(self.model.device).to(self.model.dtype)
@@ -182,7 +189,8 @@ class IntervenedQwen3ASRModel(Qwen3ASRModel):
             set_attention_intervention_runtime(runtime)
             stopping_criteria = None
             try:
-                teacher_ids, teacher_attention_mask, teacher_context_mask, student_context_mask = (
+                (teacher_ids, teacher_attention_mask, teacher_context_mask, student_context_mask,
+                 student_audio_mask) = (
                     _build_teacher_inputs(
                         self,
                         inputs['input_ids'],
@@ -191,7 +199,7 @@ class IntervenedQwen3ASRModel(Qwen3ASRModel):
                         runtime.strategy == 'shuffled_teacher',
                         runtime.seed,
                     ))
-                runtime.begin_student(student_context_mask)
+                runtime.begin_student(student_context_mask, student_audio_mask)
                 if runtime.needs_teacher:
                     runtime.begin_teacher(teacher_context_mask)
                     teacher_position_ids = teacher_attention_mask.long().cumsum(dim=-1) - 1

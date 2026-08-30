@@ -77,6 +77,49 @@ def test_zero_context_removes_only_context_mass():
     torch.testing.assert_close(weights.flatten(), torch.tensor([0.0, 1.0]))
 
 
+def test_zero_context_to_audio_changes_audio_query_only():
+    runtime = MODULE.AttentionInterventionRuntime('zero_context_to_audio', layers=[0])
+    runtime.begin_student(
+        torch.tensor([[True, False, False]]),
+        torch.tensor([[False, True, False]]),
+    )
+    MODULE.set_attention_intervention_runtime(runtime)
+    try:
+        query = torch.zeros(1, 1, 3, 2)
+        key = torch.zeros(1, 1, 3, 2)
+        value = torch.eye(3).reshape(1, 1, 3, 3)
+        _, weights = MODULE.applicable_attention_forward(
+            DummyAttention(enabled=True), query, key, value, None, scaling=1.0)
+    finally:
+        MODULE.clear_attention_intervention_runtime()
+    torch.testing.assert_close(weights[0, 0, 0], torch.full((3,), 1 / 3))
+    torch.testing.assert_close(weights[0, 0, 1], torch.tensor([0.0, 0.5, 0.5]))
+    torch.testing.assert_close(weights[0, 0, 2], torch.full((3,), 1 / 3))
+    assert runtime.stats['audio_applied_rows'] == 1
+    assert runtime.stats['transcript_applied_rows'] == 0
+
+
+def test_zero_context_both_changes_audio_and_transcript_queries():
+    runtime = MODULE.AttentionInterventionRuntime('zero_context_both', layers=[0])
+    runtime.begin_student(
+        torch.tensor([[True, False, False]]),
+        torch.tensor([[False, True, False]]),
+    )
+    student = torch.full((1, 1, 3, 3), 1 / 3)
+    actual = MODULE._apply_attention_intervention(student, runtime, 0)
+    torch.testing.assert_close(actual[0, 0, 0], torch.full((3,), 1 / 3))
+    torch.testing.assert_close(actual[0, 0, 1], torch.tensor([0.0, 0.5, 0.5]))
+    torch.testing.assert_close(actual[0, 0, 2], torch.tensor([0.0, 0.5, 0.5]))
+    assert runtime.stats['audio_applied_rows'] == 1
+    assert runtime.stats['transcript_applied_rows'] == 1
+
+
+def test_audio_query_mask_is_inactive_during_decode():
+    indices = MODULE._query_indices(
+        torch.tensor([[False, True, False]]), batch_index=0, query_length=1, key_length=4, device='cpu')
+    assert indices.numel() == 0
+
+
 def test_teacher_alpha_one_matches_teacher_context_mass():
     runtime = MODULE.AttentionInterventionRuntime('correct_teacher', alpha=1.0, layers=[0])
     runtime.teacher_context_mask = torch.tensor([[True, False]])

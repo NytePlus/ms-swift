@@ -44,6 +44,11 @@ groups=(
   "zero-context|zero_context|1.0|14"
   "zero-context-c03|zero_context|1.0|0,1,2,3,4,5,6,7,8"
   "zero-context-c14|zero_context|1.0|10,11,12,13,14,15,16,17,18"
+  "zero-audio-c03|zero_context_to_audio|1.0|0,1,2,3,4,5,6,7,8"
+  "zero-both-c03|zero_context_both|1.0|0,1,2,3,4,5,6,7,8"
+  "zero-audio-c14|zero_context_to_audio|1.0|10,11,12,13,14,15,16,17,18"
+  "zero-both-c14|zero_context_both|1.0|10,11,12,13,14,15,16,17,18"
+  "no-context|no_context|0|14"
   "matched-random|matched_mass_random|1.0|14"
 )
 
